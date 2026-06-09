@@ -516,15 +516,7 @@ body{font-family:'Geist',system-ui,sans-serif;color:var(--black);-webkit-font-sm
     </div>
   </header>
 
-  <div class="tag-bar" id="tagBar">
-    <button class="ftag on" data-t="all" onclick="setTag('all')">All</button>
-    <button class="ftag" data-t="useful" onclick="setTag('useful')">Useful</button>
-    <button class="ftag" data-t="visual" onclick="setTag('visual')">Visual</button>
-    <button class="ftag" data-t="personal" onclick="setTag('personal')">Personal</button>
-    <button class="ftag" data-t="later" onclick="setTag('later')">Later</button>
-  </div>
-
-  <!-- CAPTURE (desktop: inline; mobile: floating panel) -->
+    <!-- CAPTURE (desktop: inline; mobile: floating panel) -->
   <div class="cap-zone feed-cap" id="capZone">
     <div class="cap-box">
       <textarea class="cap-ta" id="capTA" placeholder="Capture anything..." rows="2" onkeydown="capKey(event)"></textarea>
@@ -541,7 +533,6 @@ body{font-family:'Geist',system-ui,sans-serif;color:var(--black);-webkit-font-sm
           </button>
         </div>
         <div class="cap-right">
-          <select class="col-sel" id="capCol"></select>
           <button class="cap-send" id="capSend" onclick="fireSave()">↵</button>
         </div>
       </div>
@@ -657,7 +648,6 @@ body{font-family:'Geist',system-ui,sans-serif;color:var(--black);-webkit-font-sm
         </button>
       </div>
       <div class="cap-right">
-        <select class="col-sel" id="capColM"></select>
         <button class="cap-send" id="capSendM" onclick="fireSaveM()">↵</button>
       </div>
     </div>
@@ -778,9 +768,7 @@ const KV=`Ты Ксения, 24, арт-директор в Варшаве. Пи
   // mobile: show mobile capture, hide desktop capture
   if(isMob()){
     document.getElementById('capMob').style.display='';
-    fillCapCols(true);
   } else {
-    fillCapCols(false);
   }
   renderNav();renderFeed();updateApiUI();setupDrop();
   document.addEventListener('keydown',e=>{
@@ -852,9 +840,7 @@ function renderNav(){
     return `<div class="nav-item${on?' on':''}" onclick="openProj('${p.id}')"><div class="nav-l"><div class="nav-dot"></div><span class="nav-name">${p.name}</span></div></div>`;
   }).join('');
   document.getElementById('navEnh').classList.toggle('on',S.view==='enh');
-  fillCapCols(isMob());
 }
-function fillCapCols(mob){
   const id=mob?'capColM':'capCol';
   const el=document.getElementById(id);
   if(!el)return;
@@ -976,12 +962,19 @@ ${text ? 'Text: "' + text.slice(0,400) + '"' : 'No text — analyze image only.'
         parts.push({inline_data:{mime_type: img.type, data: img.b64}});
       });
     }
-    const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key='+S.gemini, {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({contents:[{parts}]})
-    });
-    const d = await r.json();
-    if(d.error){ toast('Gemini: '+d.error.message); return null; }
+    const gemUrl='https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key='+S.gemini;
+    const body=JSON.stringify({contents:[{parts}]});
+    let d;
+    for(let attempt=0;attempt<3;attempt++){
+      const r=await fetch(gemUrl,{method:'POST',headers:{'Content-Type':'application/json'},body});
+      d=await r.json();
+      if(d.error?.code===429){
+        if(attempt<2){ await new Promise(res=>setTimeout(res,3000*(attempt+1))); continue; }
+        toast('Gemini rate limit — wait a minute and try again'); return null;
+      }
+      if(d.error){ toast('Gemini: '+(d.error.message||'').slice(0,60)); return null; }
+      break;
+    }
     const raw = d.candidates?.[0]?.content?.parts?.[0]?.text || '';
     const match = raw.match(/\{[\s\S]*\}/);
     if(!match) return null;
@@ -993,13 +986,13 @@ ${text ? 'Text: "' + text.slice(0,400) + '"' : 'No text — analyze image only.'
 let attached=[];
 function capKey(e){if((e.metaKey||e.ctrlKey)&&e.key==='Enter'){e.preventDefault();fireSave();}}
 function addAttach(e){Array.from(e.target.files).forEach(f=>{const r=new FileReader();r.onload=ev=>{attached.push({name:f.name,type:f.type,data:ev.target.result});renderAttach(attached,'capAttach');};r.readAsDataURL(f);});e.target.value='';}
-async function fireSave(){await _save(document.getElementById('capTA'),attached,'capAttach','capProc','capSend',document.getElementById('capCol').value);attached=[];}
+async function fireSave(){await _save(document.getElementById('capTA'),attached,'capAttach','capProc','capSend','refs');attached=[];}
 
 // CAPTURE — mobile
 let attachedM=[];
 function capKeyM(e){if((e.metaKey||e.ctrlKey)&&e.key==='Enter'){e.preventDefault();fireSaveM();}}
 function addAttachM(e){Array.from(e.target.files).forEach(f=>{const r=new FileReader();r.onload=ev=>{attachedM.push({name:f.name,type:f.type,data:ev.target.result});renderAttach(attachedM,'capAttachM');};r.readAsDataURL(f);});e.target.value='';}
-async function fireSaveM(){await _save(document.getElementById('capTAM'),attachedM,'capAttachM','capProcM','capSendM',document.getElementById('capColM').value);attachedM=[];closeCap();}
+async function fireSaveM(){await _save(document.getElementById('capTAM'),attachedM,'capAttachM','capProcM','capSendM','refs');attachedM=[];closeCap();}
 
 function renderAttach(arr,elId){
   document.getElementById(elId).innerHTML=arr.map((f,i)=>
@@ -1112,7 +1105,7 @@ async function doEnhance(){
 function copyOut(){navigator.clipboard.writeText(document.getElementById('outBox').textContent||'').then(()=>toast('Copied'));}
 
 // AI CALLS
-const GURL=()=>`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${S.gemini}`;
+const GURL=()=>`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${S.gemini}`;
 const gCall=(t,sys)=>fetch(GURL(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(sys?{system_instruction:{parts:[{text:sys}]},contents:[{parts:[{text:t}]}]}:{contents:[{parts:[{text:t}]}]})}).then(r=>r.json());
 async function gemNote(t){if(!S.gemini)return'';try{const d=await gCall(`Заметка почему сохранила: "${t.slice(0,300)}"`,KV);return d.candidates?.[0]?.content?.parts?.[0]?.text?.trim()||'';}catch{return'';}}
 async function gemImg(b64){if(!S.gemini)return'';try{const d=await fetch(GURL(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{parts:[{inline_data:{mime_type:'image/jpeg',data:b64}},{text:'Describe this image in 1 sentence.'}]}]})}).then(r=>r.json());return d.candidates?.[0]?.content?.parts?.[0]?.text?.trim()||'';}catch{return'';}}
