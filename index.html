@@ -934,13 +934,13 @@ function openSheet(id){
   S.sheetId=id;
   document.getElementById('shTitle').textContent=it.title||'Untitled';
   const tgs=(it.tags||[]).map(t=>`<span class="tag ${SYS_TAGS.includes(t)?t:''}">${t}</span>`).join('');
-  document.getElementById('shTags').innerHTML=`<span class="tag">${getLabel(it)}</span>${tgs}<button class="tag-add" onclick="openModal('tagM')">+ tag</button>`;
+  document.getElementById('shTags').innerHTML=`<span class="tag">${getLabel(it)}</span>${tgs}`;
   let media='';
   if(it.images?.length>1)media=`<div class="sheet-gal">${it.images.map(s=>`<img src="${s}" alt="">`).join('')}</div>`;
   else if(it.images?.length===1)media=`<img class="sheet-img" src="${it.images[0]}" alt="">`;
   else if(it.file&&it.fileType?.startsWith('image/'))media=`<img class="sheet-img" src="${it.file}" alt="">`;
   document.getElementById('shMedia').innerHTML=media;
-  const wy=document.getElementById('shWhy');if(it.why){wy.style.display='';wy.textContent=it.why;}else wy.style.display='none';
+  const wy=document.getElementById('shWhy');wy.style.display='';wy.textContent=it.why||'AI note not generated — make sure Gemini key is connected.';wy.style.color=it.why?'':'var(--z400)';
   const isLink=(it.content||'').startsWith('http');
   const lnk=document.getElementById('shLink');if(isLink){lnk.style.display='';lnk.href=it.content;lnk.textContent=it.content.replace(/https?:\/\//,'').slice(0,38)+'…';}else lnk.style.display='none';
   document.getElementById('shCopy').onclick=()=>{navigator.clipboard.writeText(it.content||it.title||'').then(()=>toast('Copied'));};
@@ -963,19 +963,30 @@ function addTag(){
 }
 
 // AI ANALYSIS
-async function aiAnalyze(text,b64s){
-  if(!S.gemini)return null;
-  const cols=S.cols.filter(c=>!c.fixed).map(c=>c.id).join(', ');
-  const p=`Analyze for Ksenia (24yo art director, Warsaw). Return ONLY valid JSON, no markdown:
-{"title":"hooky title max 50 chars","why":"1-2 sentences Ksenia's casual Russian+English, no em dashes, ex: 'та сохранила потому что reference вайб 🔥'","collection":"best from: ${cols}, or new short English name","isNewCollection":false,"tags":["1-3 from: useful, visual, personal, later"]}
-Text: "${(text||'').slice(0,400)}"`;
-  try{
-    const parts=[{text:p}];
-    if(b64s?.length)b64s.slice(0,3).forEach(b=>parts.push({inline_data:{mime_type:'image/jpeg',data:b}}));
-    const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${S.gemini}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{parts}]})});
-    const d=await r.json();
-    return JSON.parse((d.candidates?.[0]?.content?.parts?.[0]?.text||'').replace(/```json|```/g,'').trim());
-  }catch{return null;}
+async function aiAnalyze(text, imgObjects){
+  if(!S.gemini) return null;
+  const cols = S.cols.filter(c=>!c.fixed).map(c=>c.id).join(', ');
+  const prompt = `You analyze content saved by Ksenia (24yo art director, Warsaw). Return ONLY raw JSON object, no markdown, no backticks, no explanation.
+{"title":"specific title max 50 chars describing what this actually IS — never use the filename","why":"1-2 short sentences why Ksenia saved this, in her voice: casual Russian+English, no em dashes. E.g.: 'та сохранила потому что хочет посетить это место в варшаве 📍' or 'референс для следующего проекта 🔥' or 'промпт для claude попробовать ⚡'","collection":"best fit: ${cols} — use places for Warsaw locations, refs for visual inspo, prompts for AI prompts, totry for things to try","isNewCollection":false}
+${text ? 'Text: "' + text.slice(0,400) + '"' : 'No text — analyze image only.'}`;
+  try {
+    const parts = [{text: prompt}];
+    if(imgObjects && imgObjects.length) {
+      imgObjects.slice(0,3).forEach(img => {
+        parts.push({inline_data:{mime_type: img.type, data: img.b64}});
+      });
+    }
+    const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key='+S.gemini, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({contents:[{parts}]})
+    });
+    const d = await r.json();
+    if(d.error){ toast('Gemini: '+d.error.message); return null; }
+    const raw = d.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    const match = raw.match(/\{[\s\S]*\}/);
+    if(!match) return null;
+    return JSON.parse(match[0]);
+  } catch(e) { return null; }
 }
 
 // CAPTURE — desktop
@@ -1006,8 +1017,9 @@ async function _save(taEl,attArr,attachElId,procId,sendId,colVal){
   try{
     const imgs=attArr.filter(f=>f.type.startsWith('image/'));
     const others=attArr.filter(f=>!f.type.startsWith('image/'));
-    const b64s=imgs.map(f=>f.data.split(',')[1]);
-    const ai=S.gemini?await aiAnalyze(text,b64s):null;
+    const imgObjects=imgs.map(f=>({b64:f.data.split(',')[1],type:f.type||'image/jpeg'}));
+    const ai=S.gemini?await aiAnalyze(text,imgObjects):null;
+    if(!ai&&imgs.length&&S.gemini) toast('AI analysis failed — saved without notes');
     if(ai?.isNewCollection&&ai?.collection){const nid=ai.collection.toLowerCase().replace(/\s+/g,'-');if(!S.cols.find(c=>c.id===nid)){S.cols.push({id:nid,name:ai.collection,icon:'',fixed:false});saveCols();renderNav();}}
     const colId=ai?.collection?(S.cols.find(c=>c.id===ai.collection||c.name.toLowerCase()===ai.collection.toLowerCase())?.id||colVal):colVal;
     if(text||imgs.length){
